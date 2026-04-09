@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>✦ Alpha AI</h1>
+<h1> Alpha AI</h1>
 
 <p>A production-grade conversational AI assistant built with <strong>Streamlit</strong>, <strong>LangChain</strong>, and <strong>Groq</strong>.<br/>
 Multi-model · Multi-persona · Real-time analytics · Session persistence · Rate-limited</p>
