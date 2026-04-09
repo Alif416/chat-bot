@@ -586,7 +586,7 @@ st.markdown(
         <div class="alpha-logo">✦</div>
         <div>
             <div class="alpha-title">{BOT_NAME}</div>
-            <div class="alpha-sub">Powered by Groq · Always thinking, always ready</div>
+            <div class="alpha-sub">Created By Alif· Always thinking, always ready</div>
         </div>
     </div>
     <div style="margin-bottom:18px">
