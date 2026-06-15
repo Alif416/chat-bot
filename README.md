@@ -47,7 +47,7 @@ Multi-model · Multi-persona · Real-time analytics · Session persistence · Ra
 
 | Layer | Technology |
 |---|---|
-| **UI Framework** | [Streamlit](https://streamlit.io/) — reactive, component-driven Python UI |
+| **UI Framework** | [Streamlit](https://streamlit.io/) — reactive, component-driven Python UI (Claude-console inspired theme) |
 | **LLM Orchestration** | [LangChain](https://langchain.com/) — prompt templates, memory, chain abstraction |
 | **Inference API** | [Groq](https://groq.com/) — ultra-low-latency LLaMA 3 / Mixtral serving |
 | **Environment Config** | [python-dotenv](https://pypi.org/project/python-dotenv/) |
@@ -143,10 +143,13 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 
 ```
 alpha-ai/
-├── chatbot_ui.py        # Full application (~380 lines, type-annotated)
+├── chatbot_ui.py        # Full application (~480 lines, type-annotated)
+├── rate_limiter.py      # Sliding-window rate limiter (importable, tested)
 ├── requirements.txt     # Pinned dependencies
 ├── .env                 # API keys — git-ignored
 ├── chat_history.json    # Auto-generated session store — git-ignored
+├── tests/
+│   └── test_rate_limiter.py  # Unit tests (stdlib unittest, no Streamlit dep)
 └── README.md
 ```
 

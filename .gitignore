@@ -1,2 +1,11 @@
 .env
 chat_history.json
+__pycache__/
+venv/
+.venv/
+*.pyc
+*.pyo
+*.egg-info/
+.DS_Store
+.python-version
+*.log
