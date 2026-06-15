@@ -1,14 +1,18 @@
+import base64
 import json
 import os
 import re
 import time
 from datetime import datetime
+from io import BytesIO
 
 import streamlit as st
 from dotenv import load_dotenv
+from groq import Groq
 from langchain.chains import ConversationChain
 from langchain.memory import ConversationBufferMemory
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
 
 from rate_limiter import RateLimiter
@@ -236,6 +240,37 @@ hr { border-color: #E4E3DF !important; }
     color: #3A3935;
 }
 
+/* ── Chat text colour ── */
+[data-testid="stChatMessage"] p,
+[data-testid="stChatMessage"] li,
+[data-testid="stChatMessage"] h1,
+[data-testid="stChatMessage"] h2,
+[data-testid="stChatMessage"] h3,
+[data-testid="stChatMessage"] td,
+[data-testid="stChatMessage"] th {
+    color: #1C1C1C !important;
+}
+
+/* ── Code blocks (dark bg → white text) ── */
+[data-testid="stChatMessage"] pre {
+    background: #1E1E1E !important;
+    border-radius: 8px !important;
+    border: 1px solid #333 !important;
+}
+[data-testid="stChatMessage"] pre code {
+    color: #E8E8E8 !important;
+    background: transparent !important;
+}
+
+/* ── Inline code (light bg → dark text) ── */
+[data-testid="stChatMessage"] code {
+    color: #C7383A !important;
+    background: #F5F4F0 !important;
+    border-radius: 4px !important;
+    padding: 1px 5px !important;
+    font-size: 0.88em !important;
+}
+
 /* ── Response timestamp ── */
 .response-time {
     font-size: 10px;
@@ -254,20 +289,19 @@ RATE_LIMIT_CALLS = 20
 RATE_LIMIT_WINDOW = 60
 
 MODELS: dict[str, str] = {
-    "LLaMA 3.3 70B   (Best quality)":    "llama-3.3-70b-versatile",
-    "LLaMA 3.1 70B   (High quality)":    "llama-3.1-70b-versatile",
-    "LLaMA 3.1 8B    (Fastest)":         "llama-3.1-8b-instant",
-    "LLaMA 3 70B     (Reliable)":        "llama3-70b-8192",
-    "LLaMA 3 8B      (Compact)":         "llama3-8b-8192",
-    "LLaMA 3.2 3B    (Ultra-fast)":      "llama-3.2-3b-preview",
-    "LLaMA 3.2 1B    (Lightest)":        "llama-3.2-1b-preview",
-    "Mixtral 8x7B    (Balanced)":        "mixtral-8x7b-32768",
-    "Gemma 2 9B      (Google)":          "gemma2-9b-it",
-    "Gemma 7B        (Google Compact)":  "gemma-7b-it",
+    # ── OpenAI OSS (via Groq) ─────────────────────────────────────────────
+    "GPT OSS 120B    (Most powerful)":   "openai/gpt-oss-120b",
+    "GPT OSS 20B     (Balanced)":        "openai/gpt-oss-20b",
+    # ── Meta LLaMA ────────────────────────────────────────────────────────
+    "LLaMA 3.3 70B   (High quality)":    "llama-3.3-70b-versatile",
+    "LLaMA 3.1 8B    (Fast)":            "llama-3.1-8b-instant",
+    # ── Reasoning ─────────────────────────────────────────────────────────
     "DeepSeek R1 70B (Reasoning)":       "deepseek-r1-distill-llama-70b",
-    "QwQ 32B         (Qwen Reasoning)":  "qwen-qwq-32b",
-    "Mistral Saba 24B":                  "mistral-saba-24b",
+    "Qwen 3 32B      (Reasoning)":       "qwen/qwen3-32b",
 }
+
+# Vision-capable models (image input supported)
+VISION_MODELS: set[str] = set()  # no confirmed vision model in current Groq lineup
 
 PERSONAS: dict[str, dict] = {
     "💻 Coding Assistant": {
@@ -335,6 +369,7 @@ def _init_session() -> None:
         "max_tokens":     1024,
         "conversation":   None,
         "search_query":   "",
+        "pending_image":  None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -377,6 +412,48 @@ if st.session_state.conversation is None:
         st.session_state.temperature,
         st.session_state.max_tokens,
     )
+
+
+# ── Audio transcription ───────────────────────────────────────────────────────
+def transcribe_audio(audio_bytes: bytes, mime_type: str) -> str:
+    client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+    ext = mime_type.split("/")[-1].split(";")[0]
+    transcription = client.audio.transcriptions.create(
+        file=(f"audio.{ext}", audio_bytes),
+        model="whisper-large-v3-turbo",
+        response_format="text",
+    )
+    return str(transcription).strip()
+
+
+# ── Vision inference (bypasses ConversationChain for multimodal input) ────────
+def invoke_with_image(text: str, image_bytes: bytes, mime_type: str) -> str:
+    llm = ChatGroq(
+        model_name=MODELS[st.session_state.model],
+        temperature=st.session_state.temperature,
+        max_tokens=st.session_state.max_tokens,
+    )
+    msgs: list = [SystemMessage(content=PERSONAS[st.session_state.persona]["prompt"])]
+    for m in st.session_state.messages:
+        if m["role"] == "user":
+            msgs.append(HumanMessage(content=m["content"]))
+        else:
+            msgs.append(AIMessage(content=m["content"]))
+
+    b64 = base64.b64encode(image_bytes).decode()
+    msgs.append(HumanMessage(content=[
+        {"type": "text", "text": text},
+        {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}},
+    ]))
+
+    response = llm.invoke(msgs)
+
+    # Keep the text chain's memory in sync for follow-up messages
+    conv = st.session_state.conversation
+    conv.memory.chat_memory.add_user_message(text)
+    conv.memory.chat_memory.add_ai_message(response.content)
+
+    return response.content
 
 
 # ── Persistence helpers ───────────────────────────────────────────────────────
@@ -656,8 +733,48 @@ rl = st.session_state.rate_limiter
 if rl.remaining <= 5:
     st.warning(f"⚠️ **{rl.remaining}** request(s) remaining · resets in ~{rl.reset_in:.0f}s")
 
+# ── Attachments ───────────────────────────────────────────────────────────────
+is_vision_model = MODELS[st.session_state.model] in VISION_MODELS
+
+with st.expander("📎 Attach  ·  🎙 Voice", expanded=bool(st.session_state.pending_image)):
+    att_col, aud_col = st.columns(2)
+
+    with att_col:
+        if is_vision_model:
+            img_file = st.file_uploader(
+                "Image", type=["jpg", "jpeg", "png", "webp"],
+                key="img_upload", label_visibility="collapsed",
+            )
+            if img_file:
+                img_bytes = img_file.read()
+                st.session_state.pending_image = {"bytes": img_bytes, "type": img_file.type}
+                st.image(BytesIO(img_bytes), width=180)
+            elif st.session_state.pending_image:
+                st.image(BytesIO(st.session_state.pending_image["bytes"]), width=180)
+                if st.button("Remove image", use_container_width=True):
+                    st.session_state.pending_image = None
+                    st.rerun()
+        else:
+            st.caption("Switch to **Llama 4 Scout** or **Maverick** to attach images.")
+
+    with aud_col:
+        audio_file = st.file_uploader(
+            "Audio (auto-transcribe)", type=["wav", "mp3", "m4a", "webm", "ogg"],
+            key="aud_upload", label_visibility="collapsed",
+        )
+        if audio_file:
+            if st.button("Transcribe & Send", use_container_width=True):
+                with st.spinner("Transcribing with Whisper…"):
+                    try:
+                        transcript = transcribe_audio(audio_file.read(), audio_file.type)
+                        st.session_state["_voice_input"] = transcript
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"❌ Transcription failed: {exc}")
+
 # ── Chat input ────────────────────────────────────────────────────────────────
-user_input = st.chat_input(f"Message {BOT_NAME}…")
+voice_prefill = st.session_state.pop("_voice_input", None)
+user_input = st.chat_input(f"Message {BOT_NAME}…") or voice_prefill
 
 if user_input:
     rl = st.session_state.rate_limiter
@@ -665,17 +782,26 @@ if user_input:
         st.error(f"⛔ Rate limit reached. Wait **{rl.reset_in:.0f}s** before sending again.")
         st.stop()
 
+    pending = st.session_state.pending_image
+    st.session_state.pending_image = None
+
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.markdown(user_input)
+        if pending:
+            st.image(BytesIO(pending["bytes"]), width=220)
 
     with st.chat_message("assistant"):
         with st.spinner(f"{BOT_NAME} is thinking…"):
             t_start = time.perf_counter()
             try:
-                response: str = st.session_state.conversation.invoke(
-                    {"input": user_input}
-                )["response"]
+                if pending and is_vision_model:
+                    response = invoke_with_image(user_input, pending["bytes"], pending["type"])
+                else:
+                    response = st.session_state.conversation.invoke(
+                        {"input": user_input}
+                    )["response"]
+
                 elapsed = time.perf_counter() - t_start
                 st.session_state.response_times.append(elapsed)
                 st.markdown(response)
